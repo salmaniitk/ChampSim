@@ -1,0 +1,190 @@
+#include "cache.h"
+#include <iostream>
+#include <map>
+#include <iterator>
+
+// initialize replacement state
+std::map<std::uint64_t, uint64_t> wordCount;
+std::map<std::uint64_t, uint64_t> victimCount;
+std::map<std::uint64_t, uint64_t> first;
+std::map<std::uint64_t, uint64_t> hits;
+std::map<std::uint64_t, uint64_t> last;
+std::map<std::uint32_t, uint64_t> count;
+std::map<std::uint64_t, uint64_t> timeStamp;
+std::map<std::uint64_t, uint64_t> arriveStamp;
+std::map<std::uint64_t, uint64_t> setNo;
+const float bucket_size = 2;
+int number_of_buckets = 100;
+std::vector<uint64_t> histogram(number_of_buckets);
+std::vector<uint64_t> frequency(number_of_buckets);
+std::vector<uint64_t> timesEvicted(number_of_buckets);
+std::vector<uint64_t> timeInCache(number_of_buckets);
+std::vector<uint64_t> hitsInCache(number_of_buckets);
+
+uint64_t totIns=0,totMiss=0;
+//uint64_t count=0;
+
+void CACHE::llc_initialize_replacement()
+{
+
+}
+
+// find replacement victim
+uint32_t CACHE::llc_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
+{
+    // baseline LRU
+    
+    //uint64_t maxVictim=0,maxLRU=0;
+    //uint32_t way = 0;
+    /*
+    for (uint32_t i=0; i<NUM_WAY; i++) {
+    	//cout << hex << block[set][i].address << " : " << dec << victimCount[block[set][i].address] << endl;
+        if(block[set][i].address!=0 && victimCount[block[set][i].address] > maxVictim){
+        	maxVictim = victimCount[block[set][i].address];
+        	way = i;
+        }
+    }
+    
+    if(maxVictim > 0) {
+    	cout << "TRUE : " << hex << block[set][way].address << " : " << dec << maxVictim <<endl; 
+    	return way;
+    	}
+    else */
+/*
+    double d=0;
+    
+    for (uint32_t i=0; i<16; i++) {    	
+    	if(wordCount[block[set][i].full_addr] > 0 ){d = (last[block[set][i].full_addr]-first[block[set][i].full_addr])/((double)wordCount[block[set][i].full_addr]);
+            	//cout << hex << block[set][i].full_addr << " : " << dec << d << endl;
+            	
+            	if(d>15)d = 15;
+            	block[set][i].lru = (int)ceil(d);
+            	
+            	}
+            	
+            	
+            	
+        if((d > maxVictim || ( d == maxVictim && block[set][i].lru > maxLRU))){
+        	maxLRU = block[set][i].lru;
+        	maxVictim = d;
+        	way = i;
+        }
+   }*/
+    //way = lru_victim(cpu, instr_id, set, current_set, ip, full_addr, type); 
+    
+    
+     //cout << dec << "VICTIM : " << v << " : "<< hex << current_set[v].full_addr << " : " << full_addr << dec<< endl;
+     return lru_victim(cpu, instr_id, set, current_set, ip, full_addr, type);
+}
+
+// called on every cache hit and cache fill
+void CACHE::llc_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit)
+{
+    string TYPE_NAME;
+    if (type == LOAD)
+        TYPE_NAME = "LOAD";
+    else if (type == RFO)
+        TYPE_NAME = "RFO";
+    else if (type == PREFETCH)
+        TYPE_NAME = "PF";
+    else if (type == WRITEBACK)
+        TYPE_NAME = "WB";
+    else
+        assert(0);
+
+		++count[set];
+		++totIns;
+
+
+    if (hit){
+        TYPE_NAME += "_HIT";
+        ++hits[full_addr];
+        }
+    else{
+        	TYPE_NAME += "_MISS";
+        	++totMiss;
+		++victimCount[victim_addr];
+		timeStamp[victim_addr] += (count[set]-arriveStamp[victim_addr]);
+		arriveStamp[victim_addr] = 0;
+		//cout << dec<< timer << " : " << timeStamp[victim_addr] << endl;
+	}
+    if ((type == WRITEBACK) && ip)
+        assert(0);
+
+	if(totIns%1000 == 0){
+	cout << "misses per kilo : " << totIns << " : " << totMiss << endl;
+	totMiss = 0;
+	}
+
+
+		if(arriveStamp[full_addr]==0) {
+			//victimCount[full_addr] =0;
+			//timeStamp[full_addr] = 0;
+			arriveStamp[full_addr] = count[set];
+		}
+    // uncomment this line to see the LLC accesses
+	{
+
+     		//cout << "CPU: " << cpu << "  LLC " << setw(9) << TYPE_NAME << " set: " << setw(5) << set << " way: " << setw(2) << way;
+     		//cout << hex << " full_addr: " << setw(12) << full_addr << " ip: " << setw(8) << ip << " victim_addr: " << victim_addr << dec << endl;
+         	++wordCount[full_addr];
+
+
+		if(first[full_addr]==0){
+		         setNo[full_addr] = set;
+			first[full_addr] = count[set];
+			last[full_addr] = count[set];
+		}
+		else last[full_addr] = count[set];
+
+       	}
+
+
+    // baseline LRU
+    if (hit && (type == WRITEBACK)) // writeback hit does not update LRU state
+        return;
+
+    return lru_update(set, way);
+}
+
+void CACHE::llc_replacement_final_stats()
+{
+std::map<std::uint64_t, uint64_t>::iterator itFirst = first.begin();
+std::map<std::uint64_t, uint64_t>::iterator itLast = last.begin();
+std::map<std::uint64_t, uint64_t>::iterator itTS = timeStamp.begin();
+std::map<std::uint64_t, uint64_t>::iterator itAS = arriveStamp.begin();
+std::map<std::uint64_t, uint64_t>::iterator itVC = victimCount.begin();
+double d;
+int bucket;
+
+for (std::map<std::uint64_t, uint64_t>::iterator it = wordCount.begin(); it != wordCount.end(); ++it)
+     {
+		if(it->second == 0)continue;
+		d = (((itLast-> second) - (itFirst->second))/((double)it->second));
+		bucket = (int)ceil(d / bucket_size);
+		++histogram[bucket];
+		frequency[bucket] += it->second;
+		if(arriveStamp[it->first] != 0){
+			timeStamp[it->first] += (count[setNo[it->first]]-arriveStamp[it->first]);
+			++victimCount[it->first];
+		}
+		timeInCache[bucket]+= timeStamp[it->first];
+		timesEvicted[bucket]+= victimCount[it->first];
+		hitsInCache[bucket] += hits[it->first];
+		//if(itVictimCount->second > 1){ 
+           	//cout << hex << it->first << endl; 
+	   	//cout << dec << it->second << " : " << itFirst->second <<" : "<< itLast->second << " : " << fixed << setprecision(2) << d << endl;
+		++itFirst;
+		++itLast;
+		++itVC;
+		++itAS;
+		++itTS;
+	
+     }
+for(int i=0;i<100;++i){
+	if(histogram[i] > 0 && timesEvicted[i] > 0) {
+cout << setw(3) <<(i-1)*2<<setw(3) << " to " <<setw(3)<< i*2 <<setw(10)<< " : Uni_Add : " <<setw(10)<< histogram[i]<< " : Freq :" <<setw(10)<< frequency[i] << " : AvTimeinCache : " <<setw(10)<< dec << ((double)timeInCache[i]/(double)(timesEvicted[i])) << " : TotHits " <<setw(10)<< hitsInCache[i] << endl; 
+	}
+}
+
+}

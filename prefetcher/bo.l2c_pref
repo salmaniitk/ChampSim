@@ -1,0 +1,110 @@
+#include "cache.h"
+#define SCOREMAX 31
+#define ROUNDMAX 100
+#define RRENTRIES 255
+#define RRBASE 8
+#define SCORES 52
+#define BADSCORE 1
+
+uint64_t offList[] ={1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24, 25, 27, 30, 32, 36, 40, 45, 48, 50, 54, 60, 64, 72, 75, 80, 81, 90, 96, 100, 108, 120, 125, 128, 135, 144, 150, 160, 162, 180, 192, 200, 216, 225, 240, 243, 250, 256};
+uint64_t currStrideIndex = 0,rounds=0,currOffsetIndex,maxScore,maxScoreIndex;
+uint64_t offScore[SCORES],RR[RRENTRIES+1];
+bool prefetchON = false;
+
+bool inRRTable(int64_t rr_addr){
+	uint64_t tag;
+	tag = rr_addr = (rr_addr>>LOG2_BLOCK_SIZE);
+	rr_addr = rr_addr & RRENTRIES;
+	tag = (tag>>RRBASE);
+	if(RR[rr_addr] == tag) return true;
+	else return false;
+}
+
+uint64_t findMaxScore(){
+	uint64_t max=0;
+	for(int i=0;i<SCORES;++i){
+		if(offScore[i] > max){
+			max = offScore[i];
+			maxScoreIndex = i;
+		}
+	}
+	return max;
+}
+
+void addToRRTable(int64_t addr){
+	uint64_t tag;
+	tag = addr = (addr>>LOG2_BLOCK_SIZE);
+	addr = addr & RRENTRIES;
+	tag = (tag>>RRBASE);
+	RR[addr] = tag; 
+	return;
+}
+
+void resetScores(){
+	for(int i=0;i<SCORES;++i){
+		offScore[i] = 0;
+	}
+	return;
+}
+
+void resetRR(){
+	for(int i=0;i<=RRENTRIES;++i){
+		RR[i] = 0;
+	}
+	return;
+}
+
+void CACHE::l2c_prefetcher_initialize() 
+{
+    cout << "CPU " << cpu << " L2C next line prefetcher" << endl;
+    resetScores();
+    resetRR();
+}
+
+
+
+void CACHE::l2c_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type)
+{
+	if(!cache_hit || (cache_hit && type == PREFETCH)){
+		uint64_t rr_addr = ((addr >> LOG2_BLOCK_SIZE)-offList[(++currStrideIndex) - 1])<<LOG2_BLOCK_SIZE; // calculate address to check in RR table: X - d_i
+		if(inRRTable(rr_addr))++offScore[currStrideIndex-1]; // check X - d_i in RR table, if found increment the corresponding score
+		if(currStrideIndex == SCORES){  // end of Round
+			currStrideIndex = 0;
+			++rounds; // increment numnber of rounds if all 52 offsets checked
+			if(rounds == ROUNDMAX || findMaxScore() == SCOREMAX){ // if total ROUNDMAX reached OR SCOREMAX reached, End Of Learning Phase
+				maxScore = findMaxScore();
+				currOffsetIndex = maxScoreIndex; // index of D updated
+				if(maxScore > BADSCORE){
+					//cout << currOffsetIndex << " : " << maxScore << endl;
+					prefetchON = true; // if maximum offset Score > BADSCORE turn ON prefetching
+				}
+				else prefetchON = false; // else turn ot OFF
+				rounds = 0;
+				maxScore = 0;
+				resetScores(); // reset Scores
+			}
+		} 
+	}
+	
+
+    	uint64_t pf_addr = ((addr>>LOG2_BLOCK_SIZE)+offList[currOffsetIndex]) << LOG2_BLOCK_SIZE; // calculate prefetch address X + D, where D = offset[currOffsetIndex]
+    	if(prefetchON){
+    		//cout << currOffsetIndex << " : " << offList[currOffsetIndex] << endl;
+    		prefetch_line(ip, addr, pf_addr, FILL_L2); // prefetch block, if prefetching is ON
+    	}
+}
+
+void CACHE::l2c_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr)
+{
+
+	if(!prefetch && !prefetchON)addToRRTable(addr); // if prefetch is OFF add every fetched line Y to RR table
+	else if(prefetch){
+		uint64_t rr_addr = ((addr >> LOG2_BLOCK_SIZE)-offList[currOffsetIndex])<<LOG2_BLOCK_SIZE; // calculate  Y - D
+		addToRRTable(rr_addr); // if it is a prefetched line add Y - D to RR table
+	}
+}
+
+void CACHE::l2c_prefetcher_final_stats()
+{
+    cout << "CPU " << cpu << " L2C next line prefetcher final stats" << endl;
+}
